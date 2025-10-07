@@ -1,24 +1,26 @@
 import os
-import logging
 import sqlite3
+import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# CONFIGURATION
-TOKEN = os.getenv("TOKEN")  # NE PAS mettre ton token ici dans le repo
+# --- CONFIGURATION ---
+TOKEN = os.getenv("TOKEN")
 ADMIN_USERNAME = "@RUBENHRM777"
 ACHAT_LINK = "https://sgzxfbtn.mychariow.shop/prd_8ind83"
 SEUIL_RECOMPENSE = 5
 DB_FILE = "data.db"
 
 if not TOKEN:
-    raise RuntimeError("La variable d'environnement TOKEN n'est pas définie. Configure-la sur Render.")
+    raise RuntimeError("TOKEN manquant ! Ajoute-le dans Render > Environment Variables.")
 
-# Logging
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# --- Database ---
+# --- BASE DE DONNÉES ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -46,80 +48,55 @@ def get_user(user_id):
 def add_user(user_id, username, parrain_id=None):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO users (user_id, username, parrain_id) VALUES (?, ?, ?)",
-              (user_id, username, parrain_id))
+    c.execute(
+        "INSERT OR IGNORE INTO users (user_id, username, parrain_id) VALUES (?, ?, ?)",
+        (user_id, username, parrain_id)
+    )
     if parrain_id:
-        # increment filleuls du parrain si il existe
         c.execute("UPDATE users SET filleuls = filleuls + 1 WHERE user_id = ?", (parrain_id,))
     conn.commit()
     conn.close()
 
-def increment_acheteur(user_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("UPDATE users SET acheteurs = acheteurs + 1 WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
-
-def count_acheteurs_of_parrain(parrain_id):
-    # compte les filleuls acheteurs (ici on stocke acheteurs sur le compte filleul)
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM users WHERE parrain_id = ? AND acheteurs > 0", (parrain_id,))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else 0
-
-# --- Handlers ---
+# --- COMMANDES ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    args = context.args  # payload après /start
+    args = context.args
     ref = args[0] if args else None
-
-    # Vérifier ref parrain (format attendu: ref_<id>)
     parrain_id = None
+
     if ref and ref.startswith("ref_"):
         try:
             parrain_id = int(ref.split("ref_")[1])
             if parrain_id == user.id:
-                parrain_id = None  # protection contre auto-parrainage
+                parrain_id = None
         except:
             parrain_id = None
 
     if not get_user(user.id):
         add_user(user.id, user.username or user.full_name, parrain_id)
-
-        # prévenir le parrain si possible
         if parrain_id:
-            parrain = get_user(parrain_id)
-            if parrain:
-                try:
-                    await context.bot.send_message(parrain_id, f"🎉 Nouveau filleul ! @{user.username or user.first_name} s'est inscrit grâce à ton lien.")
-                except Exception:
-                    pass
+            try:
+                await context.bot.send_message(
+                    chat_id=parrain_id,
+                    text=f"🎉 Nouveau filleul ! @{user.username or user.first_name} s'est inscrit grâce à ton lien."
+                )
+            except Exception:
+                pass
 
-    # Message de bienvenue
-    if parrain_id:
-        await update.message.reply_text(
-            f"👋 Bienvenue {user.first_name} !\n\n"
-            f"Tu as été invité par un membre.\n\n"
-            f"🛍️ Pour acheter : /achat\n"
-            f"🔗 Pour obtenir ton lien après inscription : /parrainage\n"
-            f"📊 Voir ton tableau : /dashboard"
-        )
-    else:
-        await update.message.reply_text(
-            f"👋 Bienvenue {user.first_name} !\n\n"
-            "🎓 Tu es dans le programme Pack Formations Business 2026.\n"
-            "Commandes utiles :\n"
-            "/achat  /parrainage  /dashboard  /recompense  /aide"
-        )
+    msg = (
+        f"👋 Bienvenue {user.first_name} !\n\n"
+        "🎓 Programme *Pack Formations Business 2026*\n\n"
+        "Commandes utiles :\n"
+        "/achat – Acheter le produit\n"
+        "/parrainage – Obtenir ton lien\n"
+        "/dashboard – Voir tes statistiques\n"
+        "/recompense – Vérifier ta récompense\n"
+        "/aide – Aide"
+    )
+    await update.message.reply_text(msg)
 
 async def achat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"🛍️ Voici le lien officiel :\n{ACHAT_LINK}\n\n"
-        "Après ton achat, envoie la référence avec /confachat <REFERENCE> pour demander la validation."
-    )
+    await update.message.reply_text(f"🛍️ Voici ton lien d'achat :\n{ACHAT_LINK}")
 
 async def parrainage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -128,75 +105,41 @@ async def parrainage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lien = f"https://t.me/{context.bot.username}?start=ref_{user.id}"
     await update.message.reply_text(
         f"💸 Ton lien de parrainage :\n{lien}\n\n"
-        f"Partage-le ! Chaque filleul acheteur te rapproche de la récompense (seuil : {SEUIL_RECOMPENSE})."
+        "Partage-le et gagne dès que tes filleuls achètent !"
     )
 
 async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     row = get_user(user.id)
     if not row:
-        await update.message.reply_text("Aucune donnée. Fais /start pour t'inscrire.")
+        await update.message.reply_text("Tu n'es pas encore enregistré. Fais /start pour commencer.")
         return
-    # row format: (user_id, username, parrain_id, filleuls, acheteurs, recompense)
-    filleuls = row[3] or 0
-    acheteurs = count_acheteurs_of_parrain(user.id)  # plus fiable si on stocke parrain_id sur chaque filleul
+    filleuls, acheteurs = row[3], row[4]
     statut = "✅ Éligible" if acheteurs >= SEUIL_RECOMPENSE else "❌ Non éligible"
     await update.message.reply_text(
-        f"📊 TON DASHBOARD\n\n"
-        f"👤 @{user.username}\n"
-        f"👥 Filleuls inscrits : {filleuls}\n"
-        f"🛒 Filleuls acheteurs : {acheteurs}\n"
+        f"📊 TON TABLEAU DE BORD\n\n"
+        f"👥 Filleuls : {filleuls}\n"
+        f"🛒 Acheteurs : {acheteurs}\n"
         f"🏆 Statut : {statut}"
     )
 
-async def recompense(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    acheteurs = count_acheteurs_of_parrain(user.id)
-    if acheteurs < SEUIL_RECOMPENSE:
-        await update.message.reply_text(f"Tu as {acheteurs} filleuls acheteurs. Il t'en faut {SEUIL_RECOMPENSE}.")
-    else:
-        await update.message.reply_text(
-            f"🎉 Félicitations @{user.username} ! Tu as {acheteurs} filleuls acheteurs.\n"
-            "Ta demande a été enregistrée. L'admin vérifiera et te contactera pour le paiement."
-        )
-        # Notifier l'admin (on ne connaît que le username, on ne possède pas l'id admin ici)
-        # Optionnel : si tu veux que l'admin recoive un message, on devra stocker son user_id et l'utiliser ici.
-
 async def aide(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "/achat → Lien d'achat\n"
-        "/parrainage → Ton lien unique\n"
-        "/dashboard → Voir tes stats\n"
-        "/recompense → Demander récompense\n"
-        "/aide → Ce message\n\n"
-        f"Assistance : {ADMIN_USERNAME}"
+        "📘 Commandes disponibles :\n"
+        "/achat /parrainage /dashboard /recompense /aide\n\n"
+        f"Support : {ADMIN_USERNAME}"
     )
 
-# Handler pour /confachat <REFERENCE> (utilisateur envoie référence d'achat)
-async def confachat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    parts = context.args
-    if not parts:
-        await update.message.reply_text("Usage : /confachat <REFERENCE>")
-        return
-    reference = parts[0]
-    # avertir admin par message public dans le chat du bot (si admin a lancé le bot, sinon on peut stocker)
-    await update.message.reply_text("✅ Ta référence a été envoyée à l'administrateur pour validation.")
-    # Ici on pourrait enregistrer la référence dans DB pour vérification manuelle si souhaité.
-
-# --- Main ---
+# --- LANCEMENT DU BOT ---
 def main():
     init_db()
     app = ApplicationBuilder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("achat", achat))
     app.add_handler(CommandHandler("parrainage", parrainage))
     app.add_handler(CommandHandler("dashboard", dashboard))
-    app.add_handler(CommandHandler("recompense", recompense))
     app.add_handler(CommandHandler("aide", aide))
-    app.add_handler(CommandHandler("confachat", confachat))
-
-    print("🤖 Bot démarré...")
+    print("🤖 Bot démarré avec succès...")
     app.run_polling()
 
 if __name__ == "__main__":
